@@ -37,6 +37,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
+          # 第八课契约②：生产只认 vX.Y.Z，不认 latest。
+          # metadata-action 默认会给 tag 事件附加 latest（flavor.latest=auto），
+          # 必须显式关掉 —— 否则 latest 一直在漂，故障没法复现。
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=sha,format=short
