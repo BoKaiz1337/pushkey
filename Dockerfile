@@ -13,6 +13,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+# 自测随镜像走：docker run --rm pushkey:vN python selftest.py
+COPY selftest.py .
 
 # 数据落盘目录（SQLite）。用非 root，且目录先建好给权限。
 RUN mkdir -p /data && useradd -u 10001 -m pushkey && chown -R pushkey:pushkey /app /data

@@ -169,7 +169,36 @@ kubectl -n st-zbk set image deployment/pushkey web=registry.dev.oaiai.ai/zbk/pus
 
 ---
 
-## 七、凭证怎么管的
+## 七、自测：主考点是**验过的**，不是嘴上说的
+
+```bash
+docker run --rm pushkey:local python selftest.py
+```
+
+它起一个桩中心站，只实现守护循环用到的端点，然后断言第 ④ 步真的发生了：
+
+```
+[上游 503]                  → PATCH state=paused, reason=probe_failed      ✓
+[上游余额耗尽]               → PATCH state=paused, reason=balance_exhausted ✓
+[上游 429 限流]             → PATCH state=paused, reason=probe_failed      ✓
+[上游正常（对照）]           → 不发 PATCH                                    ✓
+[中心站还在 pending]         → 不硬撞，如实说明「状态机不让」                  ✓
+```
+
+真上游那边也实测过（拨 GOLEM 的故障开关）：
+
+| 货 | GOLEM 开关 | 真实响应码 | 判出的 reason |
+|---|---|---|---|
+| `gpt_pool` | `503` | 503 | `probe_failed` |
+| `ccmax_key` | `balance_exhausted` | 402 | `balance_exhausted` |
+| `deepseek_relay` | `normal` | 200 | — （对照组） |
+
+> 线上那三条 key 目前停在 `probing`：**`probing → approved` 是管理员人工放行**，
+> 供应商角色点不了。所以「真中心站上的第 ④ 步」要等放行之后才能演。
+
+---
+
+## 八、凭证怎么管的
 
 这条是扣分重灾区，**上游 key 绝不能进日志**。本服务的做法：
 
@@ -184,7 +213,7 @@ kubectl -n st-zbk set image deployment/pushkey web=registry.dev.oaiai.ai/zbk/pus
 
 ---
 
-## 八、踩过的坑
+## 九、踩过的坑
 
 | 坑 | 现象 | 解 |
 |---|---|---|
