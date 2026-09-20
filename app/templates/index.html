@@ -80,7 +80,7 @@
       {% if b.pause_reason_remote %}<div class="note">reason: {{ b.pause_reason_remote }}</div>{% endif %}
       {% if b.paused_by_us %}<div class="note">本站主动下架</div>{% endif %}
     </td>
-    <td><code>{{ b.quote_remote if b.quote_remote is not none else (b.quote.price_ratio if b.quote else "—") }}</code></td>
+    <td><code>{{ b.quote.price_ratio if b.quote else "—" }}</code></td>
     <td>
       {% if b.last_probe_ok %}<span class="pill ok">正常</span>
       {% else %}<span class="pill bad">异常</span>{% endif %}

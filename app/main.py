@@ -91,7 +91,8 @@ async def api_state(request: Request) -> Any:
         r["state"] = live.get("state")
         r["pause_reason_remote"] = live.get("pause_reason")
         r["last_probe_remote"] = live.get("last_probe")
-        r["quote_remote"] = live.get("quote_ratio")
+        # 注意：列表接口**不返回** quote，别在这里读 quote_ratio 当成报价 ——
+        # 那会恒为 None。报价以本地库为准（推货/改价时写入，与中心站一致）。
     return {"guard": guard.status(), "bindings": rows,
             "events": store.recent_events(40), "remote_count": len(remote)}
 
