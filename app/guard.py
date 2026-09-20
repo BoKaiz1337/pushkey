@@ -61,22 +61,42 @@ class Guard:
         **类型/格式一律从接口读，绝不写死** —— 平台改类型时零改动。
         """
         async with self._busy:
-            report: dict[str, Any] = {"types": [], "pushed": [], "skipped": [], "errors": []}
+            report: dict[str, Any] = {"types": [], "pushed": [], "adopted": [],
+                                      "skipped": [], "errors": []}
 
             rts = (await self.janus.resource_types()).get("items", [])
             tasks = {t["resource_type"]: t for t in (await self.janus.tasks(status="open")).get("items", [])}
-            mine = {str(k.get("id")): k for k in (await self.janus.list_keys()).get("items", [])}
+            keys = (await self.janus.list_keys()).get("items", [])
+            mine = {str(k.get("id")): k for k in keys}
+            # 中心站上按资源类型索引 —— 用来对账，避免本地库一丢就重复推货
+            remote_by_rt: dict[str, dict] = {}
+            for k in keys:
+                remote_by_rt.setdefault(str(k.get("resource_type")), k)
 
             for rt in rts:
                 key_name = rt["key"]
                 fmt = rt["format"]                       # ← 平台说了算，不是我写死
                 report["types"].append({"key": key_name, "format": fmt, "label": rt.get("label")})
 
-                if key_name in {b["resource_type"] for b in store.all_bindings()}:
-                    b = store.get_binding(key_name)
-                    if b and b.get("janus_key_id") and str(b["janus_key_id"]) in mine:
-                        report["skipped"].append(key_name)
-                        continue
+                b = store.get_binding(key_name)
+                # 本地记的 id 还在中心站上 → 什么都不用做
+                if b and b.get("janus_key_id") and str(b["janus_key_id"]) in mine:
+                    report["skipped"].append(key_name)
+                    continue
+                # 本地库不认识，但中心站上已经有这个类型的货 → 认领它，别重复推
+                exist = remote_by_rt.get(key_name)
+                if exist:
+                    store.upsert_binding(
+                        key_name, janus_key_id=str(exist.get("id")),
+                        quote={"price_ratio": exist.get("quote_ratio")} if exist.get("quote_ratio") else {},
+                        paused_by_us=1 if exist.get("state") == "paused" else 0,
+                        pause_reason=exist.get("pause_reason"))
+                    store.log("adopt", key_name, str(exist.get("id")),
+                              f"中心站已有该类型的货，认领现有 key（state={exist.get('state')}）")
+                    report["adopted"].append({"resource_type": key_name,
+                                              "janus_key_id": str(exist.get("id")),
+                                              "state": exist.get("state")})
+                    continue
 
                 tpl = settings.golem_key_name.get(key_name)
                 if not tpl:
@@ -85,10 +105,10 @@ class Guard:
 
                 # 上游 key 明文：本地库优先，其次 Secret 播种的那份。
                 # GOLEM 只在创建时回显一次，没有第三条路。
-                b = store.get_binding(key_name)
-                api_key = (b or {}).get("golem_api_key") or settings.golem_key_seed.get(key_name) or ""
-                models = (b or {}).get("models") or []
-                golem_key_id = (b or {}).get("golem_key_id")
+                b = store.get_binding(key_name) or {}
+                api_key = b.get("golem_api_key") or settings.golem_key_seed.get(key_name) or ""
+                models = b.get("models") or []
+                golem_key_id = b.get("golem_key_id")
 
                 # key_id 和模型清单从 GOLEM 现读 —— 以沙盘为准
                 gk = next((k for k in await self.golem.keys() if k["name"] == tpl), None)

@@ -4,8 +4,18 @@
 #
 # 凭证全在 Secret 里，本文件不含任何明文：
 #   kubectl -n st-zbk create secret generic pushkey-secrets \
-#     --from-literal=MGW_KEY=... --from-literal=GOLEM_EMAIL=... \
-#     --from-literal=GOLEM_PASSWORD=... --from-literal=PANEL_PASSWORD=...
+#     --from-literal=MGW_KEY=...            `mgw_` 卖货凭证
+#     --from-literal=GOLEM_EMAIL=...        GOLEM 控制台账号
+#     --from-literal=GOLEM_PASSWORD=...
+#     --from-literal=PANEL_USER=zbk
+#     --from-literal=PANEL_PASSWORD=...     面板 Basic 认证
+#     --from-literal=GOLEM_KEY_GPT_POOL=...        ← 上游 key 明文，见下方说明
+#     --from-literal=GOLEM_KEY_DEEPSEEK_RELAY=...
+#     --from-literal=GOLEM_KEY_CCMAX_KEY=...
+#
+# 为什么上游明文也要进 Secret：GOLEM **只在创建 key 时回显一次**，之后任何接口都
+# 取不回来，而守护循环必须拿它去探活。所以明文随其它凭证一起由 Secret 播种，
+# 服务启动时种进本地库 —— 库丢了也能从 Secret 重建。
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
