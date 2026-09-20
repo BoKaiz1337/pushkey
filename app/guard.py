@@ -86,16 +86,19 @@ class Guard:
                 # 本地库不认识，但中心站上已经有这个类型的货 → 认领它，别重复推
                 exist = remote_by_rt.get(key_name)
                 if exist:
+                    # 列表接口不返回 quote，得回读详情才拿得到真实报价
+                    detail = await self.janus.get_key(str(exist.get("id")))
                     store.upsert_binding(
                         key_name, janus_key_id=str(exist.get("id")),
-                        quote={"price_ratio": exist.get("quote_ratio")} if exist.get("quote_ratio") else {},
-                        paused_by_us=1 if exist.get("state") == "paused" else 0,
-                        pause_reason=exist.get("pause_reason"))
+                        quote=detail.get("quote") or {},
+                        paused_by_us=1 if detail.get("state") == "paused" else 0,
+                        pause_reason=detail.get("pause_reason"))
                     store.log("adopt", key_name, str(exist.get("id")),
-                              f"中心站已有该类型的货，认领现有 key（state={exist.get('state')}）")
+                              f"中心站已有该类型的货，认领现有 key（state={detail.get('state')}）")
                     report["adopted"].append({"resource_type": key_name,
                                               "janus_key_id": str(exist.get("id")),
-                                              "state": exist.get("state")})
+                                              "state": detail.get("state"),
+                                              "quote": detail.get("quote")})
                     continue
 
                 tpl = settings.golem_key_name.get(key_name)
