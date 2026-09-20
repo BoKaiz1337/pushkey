@@ -190,6 +190,29 @@ class Guard:
             store.log("seed", detail=f"已播种上游明文：{','.join(done)}")
         return done
 
+    async def _golem_key(self, rt: str, b: dict) -> dict | None:
+        """在 GOLEM 上认出这条绑定对应的上游 key，顺手把 id / models 补进本地库。
+
+        Secret 播种进来的行只有明文，没有 id 和模型清单 —— 不补的话探活会拿
+        占位模型名去打，上游回 404，看着像「异常」其实是自己没准备好。
+        """
+        name = b.get("golem_key_name") or settings.golem_key_name.get(rt)
+        try:
+            keys = await self.golem.keys()
+        except ApiError:
+            return None
+        gk = None
+        if b.get("golem_key_id"):
+            gk = next((k for k in keys if k["id"] == b["golem_key_id"]), None)
+        if gk is None:
+            gk = next((k for k in keys if k["name"] == name), None)
+        if gk:
+            patch: dict[str, Any] = {"golem_key_id": gk["id"]}
+            if not b.get("models"):
+                patch["models"] = gk.get("models") or []
+            store.upsert_binding(rt, **patch)
+        return gk
+
     # ══ ③④ 监测 + 自动下架 ═══════════════════════════════════════
     async def probe_all(self) -> list[dict]:
         """对每条绑定做一次健康判定，该停的立刻停，该复的申请复。"""
@@ -202,16 +225,23 @@ class Guard:
             rec: dict[str, Any] = {"resource_type": rt, "janus_key_id": kid}
 
             # ① 权威信号：GOLEM 那条 key 的故障开关
-            golem_status = "?"
-            try:
-                gk = next((k for k in await self.golem.keys() if k["id"] == b.get("golem_key_id")), None)
-                if gk:
-                    golem_status = gk.get("status", "normal")
-            except ApiError as e:
-                rec["note"] = f"读 GOLEM key 状态失败：{e.status}"
+            golem_status = "unknown"
+            gk = await self._golem_key(rt, b)
+            if gk:
+                golem_status = gk.get("status", "normal")
+            b = store.get_binding(rt) or b              # _golem_key 可能补过 models
 
             # ② 业务信号：真发一次最小请求
-            model = (b.get("models") or ["?"])[0]
+            model = (b.get("models") or [None])[0]
+            if not model:
+                # 模型清单都拿不到就别乱打 —— 拿占位符去探，404 会被误读成上游故障
+                rec.update(golem_status=golem_status, http_status=0, reason=None,
+                           healthy=False, action="拿不到模型清单，跳过业务探活")
+                store.upsert_binding(rt, last_probe_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                     last_probe_ok=0, last_probe_note="模型清单为空，未探活")
+                out.append(rec)
+                continue
+
             http_status, note = 0, ""
             try:
                 http_status, note = await self.golem.probe(b["golem_api_key"], b["format"], model)
@@ -220,7 +250,8 @@ class Guard:
 
             reason = GOLEM_STATUS_REASON.get(golem_status) or classify_http(http_status, note)
             healthy = reason is None
-            rec.update(golem_status=golem_status, http_status=http_status, reason=reason, healthy=healthy)
+            rec.update(model=model, golem_status=golem_status, http_status=http_status,
+                       reason=reason, healthy=healthy)
 
             store.upsert_binding(rt, last_probe_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                  last_probe_ok=1 if healthy else 0,
@@ -283,14 +314,18 @@ class Guard:
             if not kid:
                 continue
             balance = await self.golem.balance()      # 沙盘没有余额接口 → None
-            models_ok, endpoint_ok = [], True
-            try:
-                st, _ = await self.golem.probe(b["golem_api_key"], b["format"], (b.get("models") or ["?"])[0])
-                endpoint_ok = st < 400
-                if endpoint_ok:
-                    models_ok = b.get("models") or []
-            except Exception:
-                endpoint_ok = False
+            await self._golem_key(rt, b)              # 补齐 models，别拿占位符去探
+            b = store.get_binding(rt) or b
+            models_ok, endpoint_ok = [], False
+            model = (b.get("models") or [None])[0]
+            if model:
+                try:
+                    st, _ = await self.golem.probe(b["golem_api_key"], b["format"], model)
+                    endpoint_ok = st < 400
+                    if endpoint_ok:
+                        models_ok = b.get("models") or []
+                except Exception:
+                    endpoint_ok = False
             try:
                 res = await self.janus.heartbeat(kid, endpoint_ok=endpoint_ok,
                                                  upstream_balance=balance,  # 探不到就 null，不瞎猜
