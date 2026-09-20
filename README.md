@@ -118,7 +118,7 @@ pending → probing → approved → available → imported
 ### 本地
 
 ```bash
-cp .env.example .env      # 填四个值，绝不提交
+cp .env.example .env      # 照着填，绝不提交
 docker build --platform linux/amd64 -t pushkey:local .
 docker run --rm -p 8080:8080 --env-file .env -v "$PWD/data:/data" pushkey:local
 ```
@@ -129,12 +129,16 @@ docker run --rm -p 8080:8080 --env-file .env -v "$PWD/data:/data" pushkey:local
 ### 集群
 
 ```bash
-# 凭证进 Secret，不进任何文件
+# 凭证进 Secret，不进任何文件（8 个键，逐条见 k8s.yaml 顶部注释）
 kubectl -n st-zbk create secret generic pushkey-secrets \
   --from-literal=MGW_KEY=... \
   --from-literal=GOLEM_EMAIL=... \
   --from-literal=GOLEM_PASSWORD=... \
-  --from-literal=PANEL_PASSWORD=...
+  --from-literal=PANEL_USER=zbk \
+  --from-literal=PANEL_PASSWORD=... \
+  --from-literal=GOLEM_KEY_GPT_POOL=... \
+  --from-literal=GOLEM_KEY_DEEPSEEK_RELAY=... \
+  --from-literal=GOLEM_KEY_CCMAX_KEY=...
 
 kubectl apply -f k8s.yaml
 ```
