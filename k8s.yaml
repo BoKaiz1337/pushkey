@@ -1,0 +1,117 @@
+# 第十课作业：pushkey 上游守护站 → st-zbk
+#
+#   kubectl apply -f k8s.yaml
+#
+# 凭证全在 Secret 里，本文件不含任何明文：
+#   kubectl -n st-zbk create secret generic pushkey-secrets \
+#     --from-literal=MGW_KEY=... --from-literal=GOLEM_EMAIL=... \
+#     --from-literal=GOLEM_PASSWORD=... --from-literal=PANEL_PASSWORD=...
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pushkey-data
+  namespace: st-zbk
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      # 配额 storage 只剩 1Gi，SQLite 够用就行，别把配额撑爆
+      storage: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pushkey
+  namespace: st-zbk
+  labels: {app: pushkey}
+spec:
+  replicas: 1
+  # SQLite 是单写者，滚动更新会两个 Pod 抢同一个 RWO 卷 —— 用 Recreate
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: pushkey}
+  template:
+    metadata:
+      labels: {app: pushkey}
+    spec:
+      # 教学仓库私有，集群自己拉不动（第七课的 regcred）
+      imagePullSecrets:
+        - name: regcred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001          # 让挂进来的卷对非 root 可写
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: web
+          image: registry.dev.oaiai.ai/zbk/pushkey:v1
+          ports:
+            - containerPort: 8080
+          env:
+            - {name: DB_PATH,        value: /data/pushkey.db}
+            - {name: JANUS_BASE,     value: https://gate.oaiai.ai}
+            - {name: GOLEM_BASE,     value: https://fake.oaiai.ai}
+            - {name: PROBE_SECONDS,  value: "60"}
+            - {name: HEARTBEAT_SECONDS, value: "300"}
+            - {name: PANEL_USER,     value: zbk}
+          envFrom:
+            - secretRef: {name: pushkey-secrets}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits:   {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          # 存活探针只看进程活没活，别让它因为上游抖动把 Pod 重启了
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: pushkey-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pushkey
+  namespace: st-zbk
+spec:
+  selector: {app: pushkey}
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pushkey
+  namespace: st-zbk
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+spec:
+  ingressClassName: traefik
+  rules:
+    # 准入策略 bastion-student-ingress-hosts 要求单段 + .dev.oaiai.ai
+    - host: pushkey-zbk.dev.oaiai.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pushkey
+                port: {number: 80}
+  tls:
+    - hosts: [pushkey-zbk.dev.oaiai.ai]
+      secretName: pushkey-tls

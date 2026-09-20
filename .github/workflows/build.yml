@@ -1,0 +1,62 @@
+name: 构建并推送镜像
+
+# 第八课的契约：**tag 才是发布按钮**，推 main 不发版
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  IMAGE: registry.dev.oaiai.ai/zbk/pushkey
+
+jobs:
+  build:
+    # GitHub 托管 runner 天生 linux/amd64 —— 本机是 aarch64，只能靠 CI 出 amd64 镜像
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # 口令在仓库 Secret 里，代码和日志中都不出现
+      - name: 登录镜像仓库
+        uses: docker/login-action@v4
+        with:
+          registry: registry.dev.oaiai.ai
+          username: student
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: 计算镜像标签
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 把标签写进构建摘要
+        run: |
+          {
+            echo "## 镜像已推送"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
