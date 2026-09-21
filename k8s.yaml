@@ -56,7 +56,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: web
-          image: registry.dev.oaiai.ai/zbk/pushkey:v1
+          image: registry.dev.oaiai.ai/zbk/pushkey:v8
           ports:
             - containerPort: 8080
           env:

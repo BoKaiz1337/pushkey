@@ -87,7 +87,8 @@ async def _cached_money(name: str, fn, *, refresh: bool = False,
         val = await asyncio.wait_for(fn(), timeout=timeout)
     except Exception as e:                       # 旁路信息：读不到就如实说读不到
         return {"error": f"{type(e).__name__}: {e}"}
-    at = time.strftime("%H:%M:%S", time.localtime())
+    # 跟面板其它时间戳保持一致：ISO UTC 带 Z，别给裸的 HH:MM:SS（本地时区一差就是 8 小时）
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _money_cache[name] = (now, at, val)
     return {**val, "_read_at": at}
 
