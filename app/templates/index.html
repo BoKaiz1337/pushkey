@@ -57,6 +57,7 @@
   <button onclick="act('POST','/api/sync')">同步并推货</button>
   <button onclick="act('POST','/api/run/probe')">立刻探活一轮</button>
   <button onclick="act('POST','/api/run/heartbeat')">立刻心跳一轮</button>
+  <button onclick="refreshMoney()">刷新账单</button>
   <button onclick="location.reload()">刷新</button>
 </div>
 
@@ -100,6 +101,150 @@
 </table>
 </div>
 
+<h2>用量与账单 —— 我既是进货的，也是卖货的</h2>
+
+<div class="card">
+  <div class="kv" style="margin-bottom:10px">
+    <span><b>进货口 · GOLEM</b>（我花的钱）</span>
+    {% if not golem_view.error %}
+      {% set ov = golem_view.overview or {} %}
+      {% set d24 = ov.get('last_24h') or {} %}
+      {% set gk = ov.get('keys') or {} %}
+      ·
+      <span>租户 <b>{{ (ov.get('tenant') or {}).get('name') or '—' }}</b></span> ·
+      <span>在跑 key <b>{{ num(gk.get('live')) }}/{{ num(gk.get('total')) }}</b></span> ·
+      <span>当前 RPM <b>{{ num(ov.get('rpm_now')) }}</b></span> ·
+      <span>近 24h <b>{{ num(d24.get('requests')) }}</b> 次 · <b>{{ money(d24.get('amount')) }}</b> · 错误 <b>{{ num(d24.get('errors')) }}</b></span> ·
+      <span>上游余额 <b>{% if golem_view.balance is none %}null{% else %}{{ money(golem_view.balance) }}{% endif %}</b>
+        <span class="note">（沙盘没有余额接口 → 如实报 null，不瞎猜）</span></span> ·
+      <span class="note">账单读取于 {{ golem_view.get('_read_at') or '—' }}（进程内缓存 60s，点「刷新账单」可绕过）</span>
+    {% endif %}
+  </div>
+
+  {% if golem_view.error %}
+    <div class="ban">读不到上游账目：{{ golem_view.error }}</div>
+  {% else %}
+    <div class="note" style="margin-bottom:6px">近 7 天每日账单</div>
+    <table>
+      <tr>
+        <th>日期</th><th>请求</th><th>输入</th><th>输出</th>
+        <th>缓存读</th><th>缓存写</th><th>错误</th><th>金额</th><th>说明</th>
+      </tr>
+      {% for it in (golem_view.bill or {}).get('items') or [] %}
+      {% set c = it.get('cost') or {} %}
+      <tr>
+        <td><code>{{ it.get('day') }}</code></td>
+        <td>{{ num(it.get('requests')) }}</td>
+        <td>{{ num(it.get('input_tokens')) }}</td>
+        <td>{{ num(it.get('output_tokens')) }}</td>
+        <td>{{ num(it.get('cache_read_tokens')) }}</td>
+        <td>{{ num(it.get('cache_write_tokens')) }}</td>
+        <td>{% if it.get('errors') %}<span class="pill bad">{{ num(it.get('errors')) }}</span>{% else %}0{% endif %}</td>
+        <td><b>{{ money(it.get('amount')) }}</b></td>
+        <td class="note">
+          {% if c.get('priced') is sameas false %}<span class="pill warn">含未定价模型</span> {% endif %}
+          {% if it.get('unpriced') %}未定价：{{ it.get('unpriced')|join('、') }}{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="note">近 7 天没有用量。</td></tr>
+      {% endfor %}
+    </table>
+
+    <div class="note" style="margin:16px 0 6px">近 7 天按 key / 模型拆</div>
+    <table>
+      <tr>
+        <th>上游 key</th><th>模型</th><th>请求</th><th>输入</th><th>输出</th>
+        <th>缓存读</th><th>缓存写</th><th>命中率</th><th>金额</th>
+      </tr>
+      {% for it in (golem_view.usage or {}).get('items') or [] %}
+      <tr>
+        <td><code>{{ it.get('key_name') or '—' }}</code></td>
+        <td><code>{{ it.get('model') or '—' }}</code></td>
+        <td>{{ num(it.get('requests')) }}</td>
+        <td>{{ num(it.get('input_tokens')) }}</td>
+        <td>{{ num(it.get('output_tokens')) }}</td>
+        <td>{{ num(it.get('cache_read_tokens')) }}</td>
+        <td>{{ num(it.get('cache_write_tokens')) }}</td>
+        <td>{{ "%.1f%%"|format((it.get('cache_hit_ratio') or 0) * 100) }}</td>
+        <td><b>{{ money(it.get('amount')) }}</b></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="note">近 7 天没有用量。</td></tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="kv" style="margin-bottom:10px">
+    <span><b>卖货口 · JANUS</b>（我收的钱）</span>
+    {% if not janus_view.error %}
+      {% set ks = (janus_view.me or {}).get('key_stats') or {} %}
+      {% set ju = janus_view.usage or {} %}
+      ·
+      <span>已入池 <b>{{ num(ks.get('active')) }}</b></span> ·
+      <span>待审 <b>{{ num(ks.get('pending')) }}</b></span> ·
+      <span>已停 <b>{{ num(ks.get('paused')) }}</b></span> ·
+      <span>用量总额 <b>{{ money(ju.get('total_amount')) }} {{ ju.get('currency') or '' }}</b></span> ·
+      <span class="note">账单读取于 {{ janus_view.get('_read_at') or '—' }}</span>
+    {% endif %}
+  </div>
+
+  {% if janus_view.error %}
+    <div class="ban">读不到中心站账目：{{ janus_view.error }}</div>
+  {% else %}
+    <div class="note" style="margin-bottom:6px">我的用量</div>
+    <table>
+      <tr>
+        <th>日期</th><th>模型</th><th>请求</th><th>输入</th><th>输出</th>
+        <th>缓存读</th><th>缓存写</th><th>金额</th>
+      </tr>
+      {% for it in (janus_view.usage or {}).get('items') or [] %}
+      <tr>
+        <td><code>{{ it.get('day') or it.get('date') or '—' }}</code></td>
+        <td><code>{{ it.get('model') or '—' }}</code></td>
+        <td>{{ num(it.get('requests')) }}</td>
+        <td>{{ num(it.get('input_tokens')) }}</td>
+        <td>{{ num(it.get('output_tokens')) }}</td>
+        <td>{{ num(it.get('cache_read_tokens')) }}</td>
+        <td>{{ num(it.get('cache_write_tokens')) }}</td>
+        <td><b>{{ money(it.get('amount')) }}</b></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="note">
+        还没有跑量 —— 三条 key 都停在 <code>probing</code> 等管理员放行，没进可用池就不会有量。
+      </td></tr>
+      {% endfor %}
+    </table>
+
+    <div class="note" style="margin:16px 0 6px">结算单</div>
+    <table>
+      <tr><th>单号</th><th>周期</th><th>请求</th><th>金额</th><th>状态</th></tr>
+      {% for s in (janus_view.settlements or {}).get('items') or [] %}
+      <tr>
+        <td><code>{{ s.get('id') }}</code></td>
+        <td>{{ s.get('period') or s.get('day') or '—' }}</td>
+        <td>{{ num(s.get('requests')) }}</td>
+        <td><b>{{ money(s.get('amount')) }}</b></td>
+        <td><span class="pill warn">{{ s.get('status') or '—' }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="note">暂无结算单（还没有量，也就没有单）。</td></tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  <div class="note" style="margin-top:14px">
+    <b>结算口径（四笔钱，不是两笔）</b>：非缓存输入 × input 价 ＋ 输出 × output 价
+    ＋ 缓存读 × cache_read 价 ＋ 缓存写 × cache_write 价，最后再乘我的折扣。<br>
+    ⚠️ 基座回的 <code>user_cost</code> 是<b>客户口径</b>（含分组倍率），绝不能当我的成本。
+    我的口径是 <code>真实用量 × 官方基准价 × 我的折扣</code>。<br>
+    原始 JSON：<code>GET /api/upstream</code>（进货口）、<code>GET /api/earnings</code>（卖货口）。
+    面板只渲染 <code>key_name</code> 别名，<b>不渲染 GOLEM 回的 key_prefix</b> —— 那是上游 key 的明文前缀。
+  </div>
+</div>
+
 <h2>审计日志（守护动作都留痕）</h2>
 <div class="card">
 <pre>{% for e in events %}{{ e.ts }}  {{ e.kind }}{% if e.resource_type %}  [{{ e.resource_type }}]{% endif %}{% if e.janus_key_id %}  key={{ e.janus_key_id }}{% endif %}  {{ e.detail or "" }}
@@ -115,6 +260,11 @@ async function act(method, url, body){
   if (r.ok) location.reload();
 }
 const pause   = rt => act('POST', `/api/keys/${rt}/pause`);
+// 账单有 60s 进程内缓存（两端各要 ~3s，不能每次自动刷新都现拉）—— 这个按钮绕过去
+async function refreshMoney(){
+  await Promise.all([fetch('/api/upstream?refresh=1'), fetch('/api/earnings?refresh=1')]);
+  location.reload();
+}
 const resume  = rt => act('POST', `/api/keys/${rt}/resume`);
 const revoke  = rt => confirm(`撤回 ${rt} 在中心站的 key？`) && act('DELETE', `/api/keys/${rt}`);
 const quote   = rt => { const v = prompt("新的折扣 price_ratio（0~1，如 0.35）");

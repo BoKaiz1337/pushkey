@@ -67,6 +67,11 @@ class Settings:
     # 手册提醒：推理模型思维链会吃光 max_tokens，探测要给到 300 以上
     probe_max_tokens: int = int(_env("PROBE_MAX_TOKENS", "300"))
 
+    # ── 账单缓存（秒）──────────────────────────────────────────
+    # 读一次两端账单要 ~3s（GOLEM 那边得先登控制台）。面板 60s 自动刷一次，
+    # 不能每次都现拉 —— 缓存 TTL 与自动刷新同拍。
+    money_ttl: int = int(_env("MONEY_TTL", "60"))
+
 
 settings = Settings()
 settings.golem_key_seed = {rt: _env(f"GOLEM_KEY_{rt.upper()}") for rt in settings.format_rules}

@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import secrets
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -20,6 +22,31 @@ from . import store
 
 app = FastAPI(title="pushkey · 上游守护站", version="1.0.0")
 templates = Jinja2Templates(directory="app/templates")
+
+
+# ── 页面上的数字格式 ────────────────────────────────────────────
+def _money(v: Any) -> str:
+    """金额按大小自适应小数位 —— $0.0159 别被四舍五入成 $0.02。"""
+    if v is None:
+        return "—"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return f"${f:,.6f}" if 0 < abs(f) < 0.01 else f"${f:,.4f}"
+
+
+def _num(v: Any) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.2f}"
+    return str(v)
+
+
+templates.env.globals.update(money=_money, num=_num)
 
 janus = JanusClient()
 golem = GolemClient()
@@ -38,6 +65,46 @@ def _check(request: Request) -> None:
                 return
     raise HTTPException(status_code=401, detail="需要登录",
                         headers={"WWW-Authenticate": 'Basic realm="pushkey"'})
+
+
+# ── 两端账单（「能查到用量与每日账单」这条要在**面板上**看得见）────
+_money_cache: dict[str, tuple[float, str, dict]] = {}
+
+
+async def _cached_money(name: str, fn, *, refresh: bool = False,
+                        timeout: float = 12.0) -> dict:
+    """两件事：① 失败不许把面板带崩；② 别每次刷新都去现拉。
+
+    读一次两端账单要 ~3 秒（GOLEM 那边得先登控制台拿 cookie 会话），而面板
+    每 60 秒自动刷一次 —— 每次都现实拉的话页面就一直转圈。所以进程内缓存
+    `money_ttl` 秒；**失败不入缓存**，下一轮立刻重试。
+    """
+    now = time.monotonic()
+    hit = _money_cache.get(name)
+    if hit and not refresh and now - hit[0] < settings.money_ttl:
+        return {**hit[2], "_read_at": hit[1]}
+    try:
+        val = await asyncio.wait_for(fn(), timeout=timeout)
+    except Exception as e:                       # 旁路信息：读不到就如实说读不到
+        return {"error": f"{type(e).__name__}: {e}"}
+    at = time.strftime("%H:%M:%S", time.localtime())
+    _money_cache[name] = (now, at, val)
+    return {**val, "_read_at": at}
+
+
+async def _golem_money() -> dict:
+    """进货口视角：我还剩多少、花了多少、每一分花在哪个模型上。"""
+    return {"overview": await golem.overview(),
+            "bill": await golem.bill(7),
+            "usage": await golem.usage(7),
+            "balance": await golem.balance()}       # 沙盘没有余额接口 → None
+
+
+async def _janus_money() -> dict:
+    """卖货口视角：我的 key 进了哪个池、跑了多少量、结算单开了几张。"""
+    return {"me": await janus.me(),
+            "usage": await janus.usage(),
+            "settlements": await janus.settlements()}
 
 
 @app.on_event("startup")
@@ -98,27 +165,17 @@ async def api_state(request: Request) -> Any:
 
 
 @app.get("/api/upstream")
-async def api_upstream(request: Request) -> Any:
-    """进货口视角：余额/账单/用量。"""
+async def api_upstream(request: Request, refresh: bool = False) -> Any:
+    """进货口视角：余额/账单/用量。`?refresh=1` 绕过缓存。"""
     _check(request)
-    try:
-        return {"overview": await golem.overview(),
-                "bill": await golem.bill(7),
-                "usage": await golem.usage(7),
-                "balance": await golem.balance()}
-    except ApiError as e:
-        raise HTTPException(status_code=502, detail=f"{e.status} {e.message}")
+    return await _cached_money("golem", _golem_money, refresh=refresh)
 
 
 @app.get("/api/earnings")
-async def api_earnings(request: Request) -> Any:
-    """卖货口视角：中心站的用量与结算单。"""
+async def api_earnings(request: Request, refresh: bool = False) -> Any:
+    """卖货口视角：中心站的用量与结算单。`?refresh=1` 绕过缓存。"""
     _check(request)
-    try:
-        return {"usage": await janus.usage(), "settlements": await janus.settlements(),
-                "me": await janus.me()}
-    except ApiError as e:
-        raise HTTPException(status_code=502, detail=f"{e.status} {e.message}")
+    return await _cached_money("janus", _janus_money, refresh=refresh)
 
 
 # ══ 写 ══════════════════════════════════════════════════════════
@@ -210,5 +267,8 @@ async def dashboard(request: Request) -> Any:
     except Exception as e:
         state = {"guard": guard.status(), "bindings": [], "events": [],
                  "remote_count": 0, "boot_error": f"{type(e).__name__}: {e}"}
+    golem_view, janus_view = await asyncio.gather(
+        _cached_money("golem", _golem_money), _cached_money("janus", _janus_money))
     return templates.TemplateResponse("index.html", {"request": request, **state,
-                                                     "mask": mask})
+                                                     "golem_view": golem_view,
+                                                     "janus_view": janus_view})
